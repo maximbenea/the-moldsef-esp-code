@@ -1,7 +1,4 @@
-
-
 #include <Arduino.h>
-
 #include <ESP8266WiFi.h>
 #include <ESP8266WiFiMulti.h>
 #include <ESP8266HTTPClient.h>
@@ -9,154 +6,254 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <Stepper.h>
+#include <Servo.h>
 
-// #include "certs.h"
-
+// WiFi Credentials
 #ifndef STASSID
-#define STASSID "your_SSID"
-#define STAPSK "your_password"
+#define STASSID "Pixel 7a"
+#define STAPSK "12345678"
 #endif
 
-// Definitions for stepper
+// 28BYJ-48 is 2048 steps per rev. Gear ratio is 7:1.
+// 2048 * 7 = 14336. 
+#define MOTOR_STEPS_PER_REV 14336   
+#define SLOT_COUNT 12
 
-const int STEPS_PER_REV = 2048;
-
+// Pin Definitions
 #define IN1 D1
 #define IN2 D2
 #define IN3 D3
 #define IN4 D4
 
-Stepper myStepper(STEPS_PER_REV, IN1, IN3, IN2, IN4);
+#define HOME_SWITCH_PIN D5 
+#define SERVO_PIN D8
+#define SPRAY_PIN D7 
 
-// Limit switch 
-#define HOME_SWITCH_PIN D5  // Connect between D5 and GND
+Stepper motor(2048, IN1, IN3, IN2, IN4); 
 
-// Variables
-long currentPosition = 0;
-long targetPosition = 0;    
-bool isMoving = false;      
-int motorSpeed = 10; // RPM change later for speed variation
+Servo servo;
+
+// Global Variables
+long currentStepPos = 0; 
+long slotSteps[SLOT_COUNT];
+bool isMoving = false; 
 
 ESP8266WiFiMulti WiFiMulti;
 WebSocketsClient webSocket;
 
-/*Scent list
-Woody Fruity Chemical Minty Sweet Popcorn Lemon Pungent Decayed
-*/
+void powerDownMotor() {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
 
-void runHome() {
-  Serial.println("[Stepper] Starting setup ...");
+void sprayServo() {
+  servo.attach(SERVO_PIN);
+  delay(100);
+
+  servo.write(80);
+  delay(1000); 
   
-  myStepper.setSpeed(motorSpeed);
 
-  if (digitalRead(HOME_SWITCH_PIN) == LOW) {
-    Serial.println("[Stepper] Already at home!");
-    currentPosition = 0;
-    targetPosition = 0;
-    return;
-  }
+  // Turns it on
+  digitalWrite(SPRAY_PIN, LOW);
+  delay(500); 
 
-  // If your motor goes down, change 1 to -1
+  // Keep it on fot 5s
+  digitalWrite(SPRAY_PIN, HIGH);
+  delay(5000);
+
+  // Turn it off with two low impulses 
+  digitalWrite(SPRAY_PIN, LOW);
+  delay(500);
+  digitalWrite(SPRAY_PIN, LOW);
+  delay(500);
+
+  digitalWrite(SPRAY_PIN, HIGH);
+
+  servo.write(0);
+  delay(500);
+
+  servo.detach();
+}
+
+void homeMotor() {
+  Serial.println("[HOME] Starting calibration...");
+  
+  isMoving = true;
+
+  servo.attach(SERVO_PIN);
+  delay(100);
+
+  // Mandatory so it does not conflict with anything
+  servo.write(0);
+  delay(500);
+  servo.detach();
+
+  motor.setSpeed(13); 
+
   while (digitalRead(HOME_SWITCH_PIN) == HIGH) {
-    myStepper.step(1); 
+    motor.step(-1); 
     delay(2); 
     yield();
   }
-
-  myStepper.step(-50);
-
-  currentPosition = 0;
-  targetPosition = 0;
-  isMoving = false;
-
-  Serial.println("[Stepper] Setup Complete. Position set to 0");
+  motor.step(450); 
+  
+  currentStepPos = 0;
+  Serial.println("[HOME] Calibration Complete.");
+  
+  powerDownMotor();
+  isMoving = false; // Unlock
 }
 
+void safeMotorStep(long stepsToMove) {
+  if (stepsToMove == 0) return;
+
+  int direction = (stepsToMove > 0) ? 1 : -1;
+  long stepsLeft = abs(stepsToMove);
+  
+  motor.setSpeed(13); 
+
+  while(stepsLeft > 0) {
+    int chunk = (stepsLeft > 50) ? 50 : stepsLeft;
+    motor.step(chunk * direction);
+    stepsLeft -= chunk;
+
+    // Crucial for keeping conection alive
+    yield(); 
+  }
+  
+}
+
+void moveToSlot(int slot) {
+  // If already moving, ignore new commands
+  if (isMoving) {
+    return;
+  }
+
+  if (slot < 0 || slot >= SLOT_COUNT) return;
+  
+  // Lock the motor
+  isMoving = true;
+
+  long target = slotSteps[slot];
+  long delta = target - currentStepPos;
+
+  servo.attach(SERVO_PIN);
+  delay(100);
+  servo.write(0);
+  delay(500);
+  servo.detach(); 
+
+  safeMotorStep(delta);
+  currentStepPos = target; 
+
+  sprayServo();
+  powerDownMotor();
+
+  isMoving = false;
+}
+
+void runDebugSequence() {
+  homeMotor(); 
+  delay(1000);
+
+  for (int i = 0; i < SLOT_COUNT-1; i++) {
+    moveToSlot(i);
+    delay(1000);
+
+  }
+
+  // After finishing all slots 
+  homeMotor();
+
+}
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-  // Declare JSON document outside switch to avoid jump-to-case-label error
-  DynamicJsonDocument doc(1024);
-  
   switch(type) {
     case WStype_DISCONNECTED:
       Serial.println("[WebSocket] Disconnected");
-      Serial.println("Attempting to reconnect...");
       break;
     case WStype_CONNECTED:
-      Serial.println("[WebSocket] Connected to server successfully!");
+      Serial.println("[WebSocket] Connected!");
       break;
     case WStype_TEXT:
+       if (isMoving) return;
 
-      if (isMoving) {
-        Serial.println("[Debug] Motor is BUSY. Ignoring message.");
-        return;
-      }
+      { 
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload);
 
-      deserializeJson(doc, payload);
-      
-      if (doc.containsKey("message")) {
-        String scent = doc["message"];
-        Serial.println("[Result] Detected scent: " + scent);
+        if (error) {
+           Serial.println(error.f_str());
+          return;
+        }
         
-        long newTarget = currentPosition; 
-
-        // note modify to more effective mapping 
-        if (scent == "minty") {
-          newTarget = 1000;
-        } else if (scent == "fruity") {
-          newTarget = 2000;
-        } else if (scent == "woody") {
-          newTarget = 3000;
-        } else if (scent == "chemical") {
-          newTarget = 4000;
-        } else if (scent == "sweet") {
-          newTarget = 5000;
-        } else if (scent == "popcorn") {
-          newTarget = 6000;
-        } else if (scent == "lemon") {
-          newTarget = 7000;
-        } else if (scent == "pungent") {
-          newTarget = 8000;
-        } else if (scent == "decayed") {
-          newTarget = 9000;
+        if (doc.containsKey("message")) {
+          const char* scent = doc["message"];
+          Serial.println(scent);
+          
+          int targetSlot = -1;
+          if (strcmp(scent, "minty") == 0) targetSlot = 0;
+          else if (strcmp(scent, "fruity") == 0) targetSlot = 1;
+          else if (strcmp(scent, "woody") == 0) targetSlot = 2;
+          else if (strcmp(scent, "chemical") == 0) targetSlot = 3;
+          else if (strcmp(scent, "sweet") == 0) targetSlot = 4;
+          else if (strcmp(scent, "popcorn") == 0) targetSlot = 5;
+          else if (strcmp(scent, "lemon") == 0) targetSlot = 6;
+          else if (strcmp(scent, "pungent") == 0) targetSlot = 7;
+          else if (strcmp(scent, "decayed") == 0) targetSlot = 8;
+          
+          if (targetSlot != -1) 
+            moveToSlot(targetSlot);
         }
-
-        if (newTarget != currentPosition) {
-          targetPosition = newTarget;
-          isMoving = true;
-          Serial.print("[Debug] New Target Set: ");
-          Serial.println(targetPosition);
-        }
-      
       }
       break;
-
+    case WStype_PING:
+      break;
+    case WStype_PONG:
     case WStype_ERROR:
       Serial.println("[WebSocket] Error occurred");
       Serial.printf("Error details: %s\n", payload);
-      break;
-    case WStype_PING:
-      Serial.println("[WebSocket] Ping received");
-      break;
-    case WStype_PONG:
-      Serial.println("[WebSocket] Pong received");
       break;
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  delay(500);
 
   // Setup Pins
   pinMode(HOME_SWITCH_PIN, INPUT_PULLUP);
+  
+  // Setup Spray Pin
+  pinMode(SPRAY_PIN, OUTPUT);
+  digitalWrite(SPRAY_PIN, HIGH); // Ensure On on startup
+
+  // Default state UP (0) per your request
+  servo.attach(SERVO_PIN);
+  servo.write(0); 
+  servo.detach();
+
+  // Precompute slot positions
+  for (int i = 0; i < SLOT_COUNT; i++) {
+    slotSteps[i] = (long)((float)MOTOR_STEPS_PER_REV * (float)i / (float)SLOT_COUNT);
+  }
+
+  runDebugSequence();
+  
+  // Do an initial home to set positions
+  homeMotor();
 
   // Setup WiFi
   WiFi.mode(WIFI_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFiMulti.addAP(STASSID, STAPSK);
 
+  // Serial.print("Connecting to WiFi");
   while(WiFiMulti.run() != WL_CONNECTED) {
-    delay(100);
-    Serial.print(".");
+    delay(200);
   }
   Serial.println("\nWiFi connected");
 
@@ -164,34 +261,17 @@ void setup() {
   webSocket.beginSSL("fastapi-backend-i18f.onrender.com", 443, "/ws/esp8266");
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
-  
-  // Pinging
-  webSocket.enableHeartbeat(60000, 3000, 2); // Send ping every 60s, expect pong within 3s, disconnect after 2 missed 
-
-  /* Go to home position onece, on startup
-  / This happens once after WiFi connects, before listening to WebSockets */
-  runHome();
+  //webSocket.enableHeartbeat(15000, 3000, 2);
 }
 
-
 void loop() {
-  webSocket.loop();
-
-  if (isMoving) {
-    if (currentPosition < targetPosition) {
-      myStepper.step(1); // Move forward
-      currentPosition++;
-    } 
-    else if (currentPosition > targetPosition) {
-      myStepper.step(-1); // Move backward
-      currentPosition--;
-    } 
-    else {
-      isMoving = false;
-      Serial.println("[Debug] Target Reached.");
-    }
-    
-    // Tiny delay, adjust this to make it faster/slower
-    delay(2); 
+  if (WiFiMulti.run() == WL_CONNECTED) {
+    webSocket.loop();
+  } else {
+    // Serial.println("[WiFi] Connection lost, retrying...");
+    delay(1000); // Don't spam retries too fast
   }
+
+  // 2. Feed the Hardware Watchdog
+  yield(); 
 }
