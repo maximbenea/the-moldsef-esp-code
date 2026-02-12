@@ -241,7 +241,7 @@ void setup() {
     slotSteps[i] = (long)((float)MOTOR_STEPS_PER_REV * (float)i / (float)SLOT_COUNT);
   }
 
-  runDebugSequence();
+  //runDebugSequence();
   
   // Do an initial home to set positions
   homeMotor();
