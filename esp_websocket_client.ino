@@ -193,17 +193,17 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         if (doc.containsKey("message")) {
           const char* scent = doc["message"];
           Serial.println(scent);
-          
+
           int targetSlot = -1;
-          if (strcmp(scent, "minty") == 0) targetSlot = 0;
-          else if (strcmp(scent, "fruity") == 0) targetSlot = 1;
-          else if (strcmp(scent, "woody") == 0) targetSlot = 2;
-          else if (strcmp(scent, "chemical") == 0) targetSlot = 3;
-          else if (strcmp(scent, "sweet") == 0) targetSlot = 4;
-          else if (strcmp(scent, "popcorn") == 0) targetSlot = 5;
-          else if (strcmp(scent, "lemon") == 0) targetSlot = 6;
-          else if (strcmp(scent, "pungent") == 0) targetSlot = 7;
-          else if (strcmp(scent, "decayed") == 0) targetSlot = 8;
+          
+          if (strcmp(scent, "lavender") == 0) targetSlot = 0;
+          else if (strcmp(scent, "ocean") == 0) targetSlot = 1;
+          else if (strcmp(scent, "lemon") == 0) targetSlot = 2;
+          else if (strcmp(scent, "wood") == 0) targetSlot = 3;
+          else if (strcmp(scent, "orange") == 0) targetSlot = 4;
+          else if (strcmp(scent, "strawberry") == 0) targetSlot = 5;
+          else if (strcmp(scent, "rose") == 0) targetSlot = 6;
+          else if (strcmp(scent, "mint") == 0) targetSlot = 7;
           
           if (targetSlot != -1) 
             moveToSlot(targetSlot);
