@@ -16,7 +16,7 @@ Note: *the hardware is still under development*
 graph LR
     A[Video Input] --> B(Frontend)
     B --> C{FastAPI Backend}
-    C -->|Gemini API| D[Scent Inference]
+    C -->|Groq API| D[Scent Inference]
     D --> C
     C -->|WebSocket JSON| E[ESP8266 Firmware]
     E -->|GPIO Trigger| F[Scent Hardware]
