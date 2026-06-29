@@ -4,7 +4,10 @@ This repository contains the embedded **C++ firmware** for the **MoldSEF Scent R
 
 The device acts as an edge node that maintains a persistent WebSocket connection to the central backend. It receives real-time AI-generated scent inference commands and triggers physical hardware actuators (pumps/atomizers) to reproduce the target scent.
 
-Note: *the hardware is still under development*
+> Hardware is finished
+
+> [!IMPORTANT]
+> Project won [3rd](https://www.scribd.com/document/998322719/Mold-Sef-2026-Premianti) place on national competition
 
 ### Related Repositories
 - **Backend (FastAPI/AI):** [github.com/maximbenea/fastapi-backend](https://github.com/maximbenea/fastapi-backend)
